@@ -17,10 +17,10 @@ permissions:
 jobs:
   linux:
     # Default CI path: runs on every pull_request, every push, manual runs, and the weekly schedule.
-    name: Linux (${{ matrix.product }})
+    name: Linux (${{ matrix.name }})
     runs-on: ubuntu-latest
     container:
-      image: swift:6.2-noble
+      image: swift:6.3-noble
     timeout-minutes: 30
 
     strategy:
@@ -28,15 +28,20 @@ jobs:
       matrix:
         include:
           - package: DemoTransport
-            product: TCPTransport
+            kind: target
+            name: TCPTransport
           - package: ClientServer
-            product: ClientServerCore
+            kind: target
+            name: ClientServerCore
           - package: ClientServer
-            product: ClientServerTCPDemo
+            kind: product
+            name: ClientServerTCPDemo
           - package: PeerToPeer
-            product: PeerToPeerCore
+            kind: target
+            name: PeerToPeerCore
           - package: PeerToPeer
-            product: PeerToPeerTCPDemo
+            kind: product
+            name: PeerToPeerTCPDemo
 
     steps:
       - name: Check out repository
@@ -46,16 +51,16 @@ jobs:
         run: swift --version
 
       - name: Build debug
-        run: swift build --package-path "${{ matrix.package }}" --product "${{ matrix.product }}"
+        run: swift build --package-path "${{ matrix.package }}" "--${{ matrix.kind }}" "${{ matrix.name }}"
 
       - name: Build release
-        run: swift build --package-path "${{ matrix.package }}" --product "${{ matrix.product }}" -c release
+        run: swift build --package-path "${{ matrix.package }}" "--${{ matrix.kind }}" "${{ matrix.name }}" -c release
 
   linux-smoke:
     name: Linux headless TCP smoke tests
     runs-on: ubuntu-latest
     container:
-      image: swift:6.2-noble
+      image: swift:6.3-noble
     timeout-minutes: 20
     needs: linux
 
