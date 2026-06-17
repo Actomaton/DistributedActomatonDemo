@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    # Default CI path: runs on every pull_request, every push, manual runs, and the weekly schedule.
+    name: Linux (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.3-noble
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: DemoTransport
+            kind: target
+            name: TCPTransport
+          - package: ClientServer
+            kind: target
+            name: ClientServerCore
+          - package: ClientServer
+            kind: product
+            name: ClientServerTCPDemo
+          - package: PeerToPeer
+            kind: target
+            name: PeerToPeerCore
+          - package: PeerToPeer
+            kind: product
+            name: PeerToPeerTCPDemo
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build debug
+        run: swift build --package-path "${{ matrix.package }}" "--${{ matrix.kind }}" "${{ matrix.name }}"
+
+      - name: Build release
+        run: swift build --package-path "${{ matrix.package }}" "--${{ matrix.kind }}" "${{ matrix.name }}" -c release
+
+  linux-smoke:
+    name: Linux headless TCP smoke tests
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.3-noble
+    timeout-minutes: 20
+    needs: linux
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Client-server TCP smoke test
+        shell: bash
+        run: |
+          swift build --package-path "ClientServer" --product "ClientServerTCPDemo"
+          "ClientServer/.build/debug/ClientServerTCPDemo" server 9099 &
+          server_pid=$!
+          trap 'kill "${server_pid}" >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 150); do
+            if (exec 3<>/dev/tcp/127.0.0.1/9099) >/dev/null 2>&1; then
+              exec 3>&-
+              break
+            fi
+            sleep 0.2
+          done
+
+          "ClientServer/.build/debug/ClientServerTCPDemo" client-auto 127.0.0.1 9099
+
+      - name: Peer-to-peer TCP smoke test
+        shell: bash
+        run: |
+          swift build --package-path "PeerToPeer" --product "PeerToPeerTCPDemo"
+          "PeerToPeer/.build/debug/PeerToPeerTCPDemo" peer-auto bob 9099 alice@127.0.0.1:9098 &
+          bob_pid=$!
+          trap 'kill "${bob_pid}" >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 150); do
+            if (exec 3<>/dev/tcp/127.0.0.1/9099) >/dev/null 2>&1; then
+              exec 3>&-
+              break
+            fi
+            sleep 0.2
+          done
+
+          "PeerToPeer/.build/debug/PeerToPeerTCPDemo" peer-auto alice 9098 bob@127.0.0.1:9099
+          wait "${bob_pid}"
+
+  macos-swiftpm:
+    # Heavier macOS validation: runs only for main pushes, manual runs, and the weekly schedule.
+    name: macOS SwiftPM (${{ matrix.package }})
+    runs-on: macos-26
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - DemoSupport
+          - DemoTransport
+          - ClientServer
+          - PeerToPeer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build debug
+        run: swift build --package-path "${{ matrix.package }}"
+
+      - name: Test
+        run: swift test --package-path "${{ matrix.package }}"
+
+      - name: Build release
+        run: swift build --package-path "${{ matrix.package }}" -c release
+
+  macos-smoke:
+    name: macOS headless TCP smoke tests
+    runs-on: macos-26
+    timeout-minutes: 20
+    needs: macos-swiftpm
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Client-server TCP smoke test
+        run: make "client-server-tcp-demo-mac"
+
+      - name: Peer-to-peer TCP smoke test
+        run: make "peer-to-peer-tcp-demo-mac"
